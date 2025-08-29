@@ -33,7 +33,7 @@ export RPC=
 export PK=
 export ETHERSCAN_API_KEY=
 
-forge script script/DeployStablecoin.s.sol:DeployStablecoinScript --rpc-url $RPC_URL --private-key $PK --broadcast --verify --etherscan-api-key $ETHERSCAN_API_KEY -vvvv
+forge script script/DeployStablecoin.s.sol:DeployStablecoinScript --rpc-url $RPC --private-key $PK --broadcast --verify --etherscan-api-key $ETHERSCAN_API_KEY -vvvv
 ```
 
 Note that some RPCs might have rate limits so concurrent deployments might be rejected. If so, run the script line by line.
