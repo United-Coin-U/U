@@ -17,7 +17,6 @@ contract Stablecoin is ERC20PermitUpgradeable, Ownable2StepUpgradeable, Pausable
     error InvalidAmount(uint256 amount);
     error MintLimitExceeded(uint256 amount, uint256 limit);
    
-
     event Mint(address indexed caller, address indexed to, uint256 amount);
     event AutoMint(address indexed caller, address indexed to, uint256 indexed seq, uint256 amount);
     event Burn(address indexed caller, address indexed from, uint256 amount);
@@ -52,7 +51,7 @@ contract Stablecoin is ERC20PermitUpgradeable, Ownable2StepUpgradeable, Pausable
     }
 
    /**
-     * @dev Initializer method v1
+     * @dev Initializer method
      */
     function initialize(string memory _name, string memory _symbol) public initializer {
         __Context_init();
@@ -106,7 +105,7 @@ contract Stablecoin is ERC20PermitUpgradeable, Ownable2StepUpgradeable, Pausable
      * @param limit auto mint max limit
      * Can only be called by the auto owner.
      */
-    function setAutoMintMaxLimit(uint256 limit) public onlyOwnerOrAutoOwner {
+    function setAutoMintMaxLimit(uint256 limit) public onlyOwner {
         emit SetAutoMintMaxLimit(autoMintMaxLimit, limit);
         autoMintMaxLimit = limit;
     }

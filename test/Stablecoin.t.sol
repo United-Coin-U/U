@@ -13,14 +13,18 @@ contract StablecoinTest is Test {
     SigUtils internal sigUtils;
     uint256 internal ownerPrivateKey;
     uint256 internal spenderPrivateKey;
+    uint256 internal autoOwnerPrivateKey;
     address internal owner;
     address internal spender;
+    address internal autoOwner;
 
     function setUp() public {
         ownerPrivateKey = 0xA11CE;
         spenderPrivateKey = 0xB0B;
+        autoOwnerPrivateKey = 0xC0C;
 
         owner = vm.addr(ownerPrivateKey);
+        autoOwner = vm.addr(autoOwnerPrivateKey);
         spender = vm.addr(spenderPrivateKey);
 
         vm.startPrank(owner);
@@ -521,5 +525,64 @@ contract StablecoinTest is Test {
         vm.prank(spender);
         vm.expectRevert("ERC20: transfer amount exceeds balance");
         token.transferFrom(owner, spender, 2e18); // attempt to transfer 2 tokens (owner only owns 1)
+    }
+
+    function testSetAutoMintLimit() public {
+        uint256 newLimit = 5e18;
+
+        vm.prank(owner);
+        token.setAutoMintMaxLimit(newLimit);
+        assertEq(token.autoMintMaxLimit(), newLimit);
+
+        vm.prank(autoOwner);
+        vm.expectRevert("Ownable: caller is not the owner");
+        token.setAutoMintMaxLimit(newLimit);
+    }
+
+    function testMintTo() public {
+        uint256 mintAmount = 5e18;
+
+        uint256 spenderAmount = token.balanceOf(spender);
+        vm.prank(owner);
+        token.mint(spender, mintAmount);
+        assertEq(token.balanceOf(spender), spenderAmount+mintAmount);
+
+        vm.prank(autoOwner);
+        vm.expectRevert("Ownable: caller is not the owner");
+         token.mint(spender, mintAmount);
+    }
+
+    function testAutoMint() public {
+        uint256 mintAmount = 5e18;
+
+        uint256 spenderInitAmount = token.balanceOf(spender);
+        uint256 currentNonce = token.nonce();
+        vm.startPrank(owner);
+        token.setAutoMintMaxLimit(mintAmount);
+        token.transferAutoOwnership(autoOwner);
+        vm.stopPrank();
+
+        vm.prank(autoOwner);
+        token.autoMint(spender, mintAmount, currentNonce, block.chainid);
+        assertEq(token.balanceOf(spender), spenderInitAmount+mintAmount);
+        
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(Stablecoin.CallerNotAutoOwner.selector,owner));
+        token.autoMint(spender, mintAmount, currentNonce, block.chainid);
+
+        currentNonce = token.nonce();
+        vm.prank(autoOwner);
+        vm.expectRevert(abi.encodeWithSelector(Stablecoin.MintLimitExceeded.selector, mintAmount+1, mintAmount));
+        token.autoMint(spender, mintAmount + 1, currentNonce, block.chainid);
+
+        vm.prank(owner);
+        token.mint(mintAmount);
+
+        currentNonce = token.nonce();
+        uint256 ownerCurrentAmount = token.balanceOf(owner);
+        vm.prank(autoOwner);
+        token.autoBurn(mintAmount, currentNonce, block.chainid);
+        assertEq(token.balanceOf(owner), ownerCurrentAmount - mintAmount);    
+        
     }
 }
