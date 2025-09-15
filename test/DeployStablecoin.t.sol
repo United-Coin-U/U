@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: UNLICENSED
 
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.28;
 
 import "forge-std/Test.sol";
 import "openzeppelin-contracts/contracts/proxy/transparent/ProxyAdmin.sol";
@@ -30,7 +30,7 @@ contract DeployStablecoinTest is Test {
             address(proxyAdmin),
             abi.encodeWithSignature("initialize(string,string)", NAME, SYMBOL)
         );
-        impl.initialize(NAME, SYMBOL);
+        //impl.initialize(NAME, SYMBOL);
 
         vm.stopPrank();
     }
@@ -41,7 +41,6 @@ contract DeployStablecoinTest is Test {
         assertEq(proxyAdmin.getProxyImplementation(proxy), address(impl));
         assertEq(keccak256(abi.encodePacked(Stablecoin(address(proxy)).name())), keccak256(abi.encodePacked(NAME)));
         assertEq(keccak256(abi.encodePacked(Stablecoin(address(proxy)).symbol())), keccak256(abi.encodePacked(SYMBOL)));
-        assertEq(keccak256(abi.encodePacked(impl.name())), keccak256(abi.encodePacked(NAME)));
-        assertEq(keccak256(abi.encodePacked(impl.symbol())), keccak256(abi.encodePacked(SYMBOL)));
+    
     }
 }

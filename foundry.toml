@@ -3,7 +3,7 @@ src = 'src'
 out = 'out'
 libs = ['lib']
 
-solc_version = "0.8.14"
+solc_version = "0.8.28"
 
 
 optimizer = true          # 启用优化器

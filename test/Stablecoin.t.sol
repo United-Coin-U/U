@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: UNLICENSED
 
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.28;
 
 import "forge-std/Test.sol";
 import "./utils/MockERC20.sol";
 import "./utils/SigUtils.sol";
+import "openzeppelin-contracts/contracts/proxy/transparent/ProxyAdmin.sol";
+import "openzeppelin-contracts/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 
 contract StablecoinTest is Test {
     MockERC20 internal token;
@@ -22,7 +24,14 @@ contract StablecoinTest is Test {
         spender = vm.addr(spenderPrivateKey);
 
         vm.startPrank(owner);
-        token = new MockERC20();
+        Stablecoin impl = new Stablecoin();
+        ProxyAdmin proxyAdmin = new ProxyAdmin();
+        TransparentUpgradeableProxy proxy = new TransparentUpgradeableProxy(
+            address(impl),
+            address(proxyAdmin),
+            abi.encodeWithSignature("initialize(string,string)", "Mock Name", "MKT")
+        );
+        token = MockERC20(address(proxy));
         sigUtils = new SigUtils(token.DOMAIN_SEPARATOR());
 
         token.mint(1e18);
@@ -161,13 +170,13 @@ contract StablecoinTest is Test {
         vm.startPrank(owner);
         token.freeze(owner);
 
-        vm.expectRevert("Account is frozen");
+        vm.expectRevert(abi.encodeWithSelector(Stablecoin.FrozenAddress.selector, owner));
         token.transfer(spender, 1e18); // source freeze
 
         token.unfreeze(owner);
         token.freeze(spender);
 
-        vm.expectRevert("Account is frozen");
+        vm.expectRevert(abi.encodeWithSelector(Stablecoin.FrozenAddress.selector, spender));
         token.transfer(spender, 1e18); // destination freeze
         vm.stopPrank();
     }
@@ -177,14 +186,14 @@ contract StablecoinTest is Test {
         token.approve(owner, 1e18);
         token.freeze(owner);
 
-        vm.expectRevert("Account is frozen");
+        vm.expectRevert(abi.encodeWithSelector(Stablecoin.FrozenAddress.selector, owner));
         token.transferFrom(owner, spender, 1e18); // source freeze
 
         token.unfreeze(owner);
         token.approve(spender, 1e18);
         token.freeze(spender);
 
-        vm.expectRevert("Account is frozen");
+        vm.expectRevert(abi.encodeWithSelector(Stablecoin.FrozenAddress.selector, spender));
         token.transferFrom(owner, spender, 1e18); // destination freeze
         vm.stopPrank();
     }
@@ -193,13 +202,13 @@ contract StablecoinTest is Test {
         vm.startPrank(owner);
         token.freeze(owner);
 
-        vm.expectRevert("Account is frozen");
+        vm.expectRevert(abi.encodeWithSelector(Stablecoin.FrozenAddress.selector, owner));
         token.approve(spender, 1e18); // source freeze
 
         token.unfreeze(owner);
         token.freeze(spender);
 
-        vm.expectRevert("Account is frozen");
+        vm.expectRevert(abi.encodeWithSelector(Stablecoin.FrozenAddress.selector, spender));
         token.approve(spender, 1e18); // destination freeze
         vm.stopPrank();
     }
@@ -476,7 +485,7 @@ contract StablecoinTest is Test {
         assertEq(token.allowance(owner, spender), type(uint256).max);
     }
 
-    function testFail_InvalidAllowance() public {
+    function testInvalidAllowance() public {
         SigUtils.Permit memory permit = SigUtils.Permit({
             owner: owner,
             spender: spender,
@@ -491,10 +500,11 @@ contract StablecoinTest is Test {
         token.permit(permit.owner, permit.spender, permit.value, permit.deadline, v, r, s);
 
         vm.prank(spender);
+        vm.expectRevert("ERC20: insufficient allowance");
         token.transferFrom(owner, spender, 1e18); // attempt to transfer 1 token
     }
 
-    function testFail_InvalidBalance() public {
+    function testInvalidBalance() public {
         SigUtils.Permit memory permit = SigUtils.Permit({
             owner: owner,
             spender: spender,
@@ -509,6 +519,7 @@ contract StablecoinTest is Test {
         token.permit(permit.owner, permit.spender, permit.value, permit.deadline, v, r, s);
 
         vm.prank(spender);
+        vm.expectRevert("ERC20: transfer amount exceeds balance");
         token.transferFrom(owner, spender, 2e18); // attempt to transfer 2 tokens (owner only owns 1)
     }
 }
