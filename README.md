@@ -1,4 +1,4 @@
-# TengeX(KZTX)
+# United Coin(U)
 
 Upgradeable ERC20 token with freeze and gas-less transaction capability.
 
