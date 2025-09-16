@@ -37,6 +37,7 @@ contract StablecoinTest is Test {
         );
         token = MockERC20(address(proxy));
         sigUtils = new SigUtils(token.DOMAIN_SEPARATOR());
+        token.transferAutoOwnership(autoOwner);
 
         token.mint(1e18);
         vm.stopPrank();
@@ -584,5 +585,73 @@ contract StablecoinTest is Test {
         token.autoBurn(mintAmount, currentNonce, block.chainid);
         assertEq(token.balanceOf(owner), ownerCurrentAmount - mintAmount);    
         
+    }
+
+    function testAutoBurn() public {
+        uint256 burnAmount = 5e18;
+        
+        //only autoowner can call autoBurn, even owner is not allowed
+        uint256 spenderInitAmount = token.balanceOf(spender);
+        uint256 currentNonce = token.nonce();
+        vm.startPrank(owner);
+        token.mint(burnAmount);
+        vm.expectRevert(abi.encodeWithSelector(Stablecoin.CallerNotAutoOwner.selector,owner));
+        token.autoBurn(burnAmount, currentNonce, block.chainid);
+        vm.stopPrank();
+
+        vm.startPrank(autoOwner);
+        bool result = token.autoBurn(burnAmount, currentNonce, block.chainid);
+        assertTrue(result);
+        vm.stopPrank();
+
+
+        //nonce must be correct
+        vm.startPrank(autoOwner);
+        currentNonce = token.nonce() + 2; //wrong nonce
+        vm.expectRevert(abi.encodeWithSelector(Stablecoin.InvalidNonce.selector,currentNonce));
+        token.autoBurn(burnAmount, currentNonce, block.chainid);
+        vm.stopPrank();
+
+        //chainId must be correct
+        vm.startPrank(autoOwner);
+        currentNonce = token.nonce();
+        uint256 chainId = block.chainid + 1; //wrong chainId
+        vm.expectRevert(abi.encodeWithSelector(Stablecoin.InvalidChainId.selector,chainId));
+        token.autoBurn(burnAmount, currentNonce, chainId);
+        vm.stopPrank();
+
+        //amount must not exceed owner's balance
+        vm.startPrank(autoOwner);
+        currentNonce = token.nonce(); 
+        vm.expectRevert("ERC20: burn amount exceeds balance");
+        token.autoBurn(burnAmount + 2, currentNonce, block.chainid);
+        vm.stopPrank();
+
+        //amount must be larger than 0
+        vm.startPrank(autoOwner);
+        currentNonce = token.nonce(); 
+        vm.expectRevert(abi.encodeWithSelector(Stablecoin.InvalidAmount.selector,0));
+        token.autoBurn(0, currentNonce, block.chainid);
+        vm.stopPrank();
+
+        //once successful, owner's balance decreases, nonce increases by 1
+        uint256 ownerCurrentAmount = token.balanceOf(owner);
+        vm.startPrank(autoOwner);
+        currentNonce = token.nonce(); 
+        token.autoBurn(1, currentNonce, block.chainid);
+        assertEq(token.balanceOf(owner), ownerCurrentAmount - 1);
+        assertEq(currentNonce+1, token.nonce());
+        vm.stopPrank();
+
+        //once fail, owner's balance and nonce remain unchanged
+        ownerCurrentAmount = token.balanceOf(owner);
+        vm.startPrank(autoOwner);
+        currentNonce = token.nonce(); 
+        vm.expectRevert("ERC20: burn amount exceeds balance");
+        token.autoBurn(ownerCurrentAmount + 1, currentNonce, block.chainid);
+        assertEq(token.balanceOf(owner), ownerCurrentAmount);
+        assertEq(currentNonce, token.nonce());
+        vm.stopPrank();
+    
     }
 }
