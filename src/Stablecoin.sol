@@ -8,7 +8,6 @@ import "openzeppelin-contracts-upgradeable/contracts/security/PausableUpgradeabl
 
 contract Stablecoin is ERC20PermitUpgradeable, Ownable2StepUpgradeable, PausableUpgradeable {
 
-    error CallerNotOwnerOrAutoOwner(address caller);
     error CallerNotAutoOwner(address caller);
     error NotAllowedAddress(address addr);
     error FrozenAddress(address addr);
@@ -35,11 +34,6 @@ contract Stablecoin is ERC20PermitUpgradeable, Ownable2StepUpgradeable, Pausable
 
     modifier onlyAutoOwner(){
         require(msg.sender == autoOwner, CallerNotAutoOwner(msg.sender));
-        _;
-    }
-
-    modifier onlyOwnerOrAutoOwner(){
-        require(msg.sender == autoOwner || msg.sender == owner(), CallerNotOwnerOrAutoOwner(msg.sender));
         _;
     }
 
