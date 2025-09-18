@@ -8,7 +8,6 @@ import "openzeppelin-contracts-upgradeable/contracts/security/PausableUpgradeabl
 
 contract Stablecoin is ERC20PermitUpgradeable, Ownable2StepUpgradeable, PausableUpgradeable {
 
-    error CallerNotOwnerOrAutoOwner(address caller);
     error CallerNotAutoOwner(address caller);
     error NotAllowedAddress(address addr);
     error FrozenAddress(address addr);
@@ -35,11 +34,6 @@ contract Stablecoin is ERC20PermitUpgradeable, Ownable2StepUpgradeable, Pausable
 
     modifier onlyAutoOwner(){
         require(msg.sender == autoOwner, CallerNotAutoOwner(msg.sender));
-        _;
-    }
-
-    modifier onlyOwnerOrAutoOwner(){
-        require(msg.sender == autoOwner || msg.sender == owner(), CallerNotOwnerOrAutoOwner(msg.sender));
         _;
     }
 
@@ -129,7 +123,7 @@ contract Stablecoin is ERC20PermitUpgradeable, Ownable2StepUpgradeable, Pausable
      * @return True if successful
      * Can only be called by the current owner.
      */
-    function mint(address to, uint256 amount) external onlyOwner returns (bool) {
+    function mint(address to, uint256 amount) external whenNotPaused notFrozen(to) onlyOwner returns (bool) {
         _mint(to, amount);
         emit Mint(_msgSender(), to, amount);
         return true;
@@ -144,7 +138,7 @@ contract Stablecoin is ERC20PermitUpgradeable, Ownable2StepUpgradeable, Pausable
      * @return True if successful
      * Can only be called by the current auto owner.
      */
-    function autoMint(address to, uint256 amount, uint256 seq, uint256 chain) external onlyAutoOwner notFrozen(to) returns (bool) {
+    function autoMint(address to, uint256 amount, uint256 seq, uint256 chain) external whenNotPaused notFrozen(to) onlyAutoOwner returns (bool) {
         require(seq == nonce, InvalidNonce(seq));
         require(chain == chainId, InvalidChainId(chain));
         require(amount > 0, InvalidAmount(amount));  
@@ -176,7 +170,7 @@ contract Stablecoin is ERC20PermitUpgradeable, Ownable2StepUpgradeable, Pausable
      * @return True if successful
      * Can only be called by the current auto owner.
      */
-    function autoBurn(uint256 amount, uint256 seq, uint256 chain) external onlyAutoOwner returns (bool) {
+    function autoBurn(uint256 amount, uint256 seq, uint256 chain) external whenNotPaused onlyAutoOwner returns (bool) {
        require(seq == nonce, InvalidNonce(seq));
         require(chain == chainId, InvalidChainId(chain));
         require(amount > 0, InvalidAmount(amount));  
