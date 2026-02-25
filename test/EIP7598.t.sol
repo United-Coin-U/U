@@ -350,7 +350,7 @@ contract EIP7598Test is Test {
 
         // Attempt transfer - should fail because account is frozen
         vm.prank(spender);
-        vm.expectRevert("Account is frozen");
+        vm.expectRevert(abi.encodeWithSelector(Stablecoin.FrozenAddress.selector, owner));
         token.transferWithAuthorization(owner, recipient, amount, validAfter, validBefore, nonce, signature);
     }
 

@@ -11,6 +11,12 @@ contract StablecoinV2 is Stablecoin {
     using ECDSAUpgradeable for bytes32;
     using AddressUpgradeable for address;
 
+    // ============ Storage Layout ============
+    // Slot 359: _authorizationStates (mapping, 1 slot for the mapping pointer)
+    // Slot 360: eip7598EnableFlag (bool, 1 byte, packed in slot 360)
+    // Slot 361-408: __gap (48 slots reserved for future upgrades)
+    // ========================================
+
     // State variable for tracking used authorization nonces
     // This uses bytes32 nonces to allow for flexible nonce strategies
     mapping(address => mapping(bytes32 => bool)) private _authorizationStates;
@@ -27,12 +33,8 @@ contract StablecoinV2 is Stablecoin {
      * @dev Throws if eip7598 is disabled.
      */
     modifier eip7598Enabled() {
-        _eip7598Enabled();
+       require(eip7598EnableFlag, "EIP7598 is disabled");
         _;
-    }
-
-    function _eip7598Enabled() internal {
-        require(eip7598EnableFlag, "EIP7598 is disabled");
     }
 
     /**
@@ -43,11 +45,9 @@ contract StablecoinV2 is Stablecoin {
     }
 
     /**
-     * @dev Initialize the contract
-     * @param _name Token name
+     * @dev Initialize the contract for V2 upgrade
      */   
-    function initializeV2(string memory _name) public reinitializer(2) {  
-        __EIP712_init(_name, "1");
+    function initializeV2() public reinitializer(2) {  
         eip7598EnableFlag = true;
     }
 
@@ -256,7 +256,19 @@ contract StablecoinV2 is Stablecoin {
 
     /**
      * @dev Gap for future upgrades
-     * Total storage slots: 50
+     * 
+     * Storage Layout for StablecoinV2:
+     * - Slot 359: _authorizationStates (mapping)
+     * - Slot 360: eip7598EnableFlag (bool)
+     * - Slot 361-408: __gap (48 slots)
+     * 
+     * Total new slots used: 2
+     * Gap size: 48 (50 - 2 = 48)
+     * 
+     * IMPORTANT: When adding new state variables in future upgrades (V3, V4, etc.):
+     * 1. Add new variables BEFORE this __gap
+     * 2. Reduce __gap size by the number of new slots used
+     * 3. Verify storage layout with `forge inspect StablecoinV3 storage-layout`
      */
-    uint256[50] private __gap;
+    uint256[48] private __gap;
 }

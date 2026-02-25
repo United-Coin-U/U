@@ -13,8 +13,8 @@ contract UpgradeStablecoinScript is Script {
 
     function setUp() public {}
 
-    address constant PROXY_ADMIN = 0xc3EFAB880544C890ebee5B727f93eaC60DD9AB34;
-    address constant PROXY = 0xa19C9FB1A377621dFd1401EF160d802A14d0C91F;
+    address constant PROXY_ADMIN = 0x842d6bB2DCDcC5470A068515EDD7467457497B5d;
+    address constant PROXY = 0x2e9AEBB9DEEbc0555694aA076FDD55AF999A9EF5;
 
     function run() external {
         vm.startBroadcast();
@@ -23,8 +23,7 @@ contract UpgradeStablecoinScript is Script {
         console.log("New Implementation:", address(newImpl));
 
         bytes memory initData = abi.encodeWithSelector(
-            StablecoinV2.initializeV2.selector,
-            NAME
+            StablecoinV2.initializeV2.selector
         );
         console.logBytes(initData);
 
