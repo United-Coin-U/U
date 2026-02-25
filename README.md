@@ -1,4 +1,4 @@
-# United Coin(U)
+# United Stables(U)
 
 Upgradeable ERC20 token with freeze and gas-less transaction capability.
 
@@ -45,7 +45,7 @@ If the contract is deployed without verification or if the deployed chain is not
 ```sh
 export ETHERSCAN_API_KEY=
 
-forge verify-contract --chain-id 12345 --compiler-version 0.8.14+commit.80d49f37 0x1234 src/Stablecoin.sol:Stablecoin --verifier-url https://api.explorer.com/api
+forge verify-contract --chain-id 12345 --compiler-version v0.8.28+commit.7893614a 0x1234 src/StablecoinV2.sol:StablecoinV2 --verifier-url https://api.explorer.com/api
 ```
 
 Note that the `chain-id` and explorer's `verifier-url` is required.
