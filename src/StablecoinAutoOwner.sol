@@ -6,6 +6,7 @@ import "openzeppelin-contracts-upgradeable/contracts/proxy/utils/Initializable.s
 import "openzeppelin-contracts-upgradeable/contracts/access/Ownable2StepUpgradeable.sol";
 import "openzeppelin-contracts-upgradeable/contracts/security/PausableUpgradeable.sol";
 import "openzeppelin-contracts-upgradeable/contracts/proxy/utils/UUPSUpgradeable.sol";
+import "openzeppelin-contracts/contracts/utils/structs/EnumerableSet.sol";
 
 interface IStablecoinAutoMintBurn {
     function autoMint(address to, uint256 amount, uint256 seq, uint256 chain) external returns (bool);
@@ -18,9 +19,12 @@ interface IStablecoinAutoMintBurn {
 /**
  * @title StablecoinAutoOwner
  * @notice UUPS-upgradeable controller that sits between the operator and Stablecoin.autoMint/autoBurn.
- *         Enforces a per-recipient mint whitelist with per-recipient per-transaction limits.
- *         Burn is a thin passthrough (Stablecoin.autoBurn has no `from` argument).
- *         Per-recipient limits are bounded above by Stablecoin.autoMintMaxLimit at set time.
+ *         Enforces an enumerable mint whitelist.
+ *         Per-transaction amount is bounded above by Stablecoin.autoMintMaxLimit
+ *         for BOTH mint and burn:
+ *           - autoMint: delegated to Stablecoin (MintLimitExceeded revert).
+ *           - autoBurn: enforced here (Stablecoin.autoBurn itself does not cap).
+ *         Burn has no recipient arg; Stablecoin.autoBurn burns from Stablecoin.owner().
  */
 contract StablecoinAutoOwner is
     Initializable,
@@ -28,23 +32,25 @@ contract StablecoinAutoOwner is
     PausableUpgradeable,
     UUPSUpgradeable
 {
+    using EnumerableSet for EnumerableSet.AddressSet;
+
     error ZeroAddress();
     error ZeroAmount();
     error NotWhitelisted(address to);
-    error PerAddressLimitExceeded(address to, uint256 amount, uint256 limit);
-    error LimitAboveGlobalCap(uint256 limit, uint256 globalCap);
     error LengthMismatch();
     error CallerNotOperator(address caller);
+    error IndexOutOfBounds(uint256 index, uint256 length);
+    error AmountExceedsMaxLimit(uint256 amount, uint256 limit);
 
     event StablecoinSet(address indexed stablecoin);
-    event MaxMintLimitSet(address indexed to, uint256 previousLimit, uint256 newLimit);
+    event WhitelistUpdated(address indexed to, bool flag);
     event OperatorTransferred(address indexed previousOperator, address indexed newOperator);
 
-    IStablecoinAutoMintBurn public stablecoin;
-    mapping(address => uint256) public maxMintLimits;
-    address public operator;
+    IStablecoinAutoMintBurn public stablecoin;        // slot N
+    EnumerableSet.AddressSet private _whitelist;      // slot N+1, N+2 (2 slots)
+    address public operator;                          // slot N+3
 
-    uint256[49] private __gap;
+    uint256[48] private __gap;
 
     modifier onlyOperator() {
         if (msg.sender != operator) revert CallerNotOperator(msg.sender);
@@ -80,9 +86,7 @@ contract StablecoinAutoOwner is
     {
         if (to == address(0)) revert ZeroAddress();
         if (amount == 0) revert ZeroAmount();
-        uint256 limit = maxMintLimits[to];
-        if (limit == 0) revert NotWhitelisted(to);
-        if (amount > limit) revert PerAddressLimitExceeded(to, amount, limit);
+        if (!_whitelist.contains(to)) revert NotWhitelisted(to);
         return stablecoin.autoMint(to, amount, seq, chain);
     }
 
@@ -92,6 +96,9 @@ contract StablecoinAutoOwner is
         whenNotPaused
         returns (bool)
     {
+        if (amount == 0) revert ZeroAmount();
+        uint256 limit = stablecoin.autoMintMaxLimit();
+        if (amount > limit) revert AmountExceedsMaxLimit(amount, limit);
         return stablecoin.autoBurn(amount, seq, chain);
     }
 
@@ -102,26 +109,21 @@ contract StablecoinAutoOwner is
         emit OperatorTransferred(previous, newOperator);
     }
 
-    function setMaxMintLimit(address to, uint256 limit) external onlyOwner {
-        _setMaxMintLimit(to, limit);
+    function setWhitelist(address to, bool flag) external onlyOwner {
+        _setWhitelist(to, flag);
     }
 
-    function setMaxMintLimitBatch(address[] calldata tos, uint256[] calldata limits) external onlyOwner {
-        if (tos.length != limits.length) revert LengthMismatch();
-        for (uint256 i = 0; i < tos.length; ++i) {
-            _setMaxMintLimit(tos[i], limits[i]);
+    function setWhitelistBatch(address[] calldata addrs, bool[] calldata flags) external onlyOwner {
+        if (addrs.length != flags.length) revert LengthMismatch();
+        for (uint256 i = 0; i < addrs.length; ++i) {
+            _setWhitelist(addrs[i], flags[i]);
         }
     }
 
-    function _setMaxMintLimit(address to, uint256 limit) internal {
+    function _setWhitelist(address to, bool flag) internal {
         if (to == address(0)) revert ZeroAddress();
-        if (limit > 0) {
-            uint256 globalCap = stablecoin.autoMintMaxLimit();
-            if (limit > globalCap) revert LimitAboveGlobalCap(limit, globalCap);
-        }
-        uint256 previous = maxMintLimits[to];
-        maxMintLimits[to] = limit;
-        emit MaxMintLimitSet(to, previous, limit);
+        bool changed = flag ? _whitelist.add(to) : _whitelist.remove(to);
+        if (changed) emit WhitelistUpdated(to, flag);
     }
 
     function pause() external onlyOwner {
@@ -132,6 +134,10 @@ contract StablecoinAutoOwner is
         _unpause();
     }
 
+    // ---------------------------------------------------------------
+    // Views
+    // ---------------------------------------------------------------
+
     function nonce() external view returns (uint256) {
         return stablecoin.nonce();
     }
@@ -140,8 +146,27 @@ contract StablecoinAutoOwner is
         return stablecoin.chainId();
     }
 
-    function maxMintLimitOf(address to) external view returns (uint256) {
-        return maxMintLimits[to];
+    function isWhitelisted(address to) external view returns (bool) {
+        return _whitelist.contains(to);
+    }
+
+    function whitelistLength() external view returns (uint256) {
+        return _whitelist.length();
+    }
+
+    function whitelistAt(uint256 index) external view returns (address) {
+        uint256 len = _whitelist.length();
+        if (index >= len) revert IndexOutOfBounds(index, len);
+        return _whitelist.at(index);
+    }
+
+    /**
+     * @notice Return the full whitelist in one call.
+     * @dev Single-call enumeration. For very large whitelists prefer
+     *      whitelistLength() + whitelistAt(i) to paginate.
+     */
+    function getWhitelist() external view returns (address[] memory) {
+        return _whitelist.values();
     }
 
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}

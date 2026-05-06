@@ -29,11 +29,9 @@ contract StablecoinAutoOwnerTest is Test {
     address internal charlie = address(0xC0FFEE);
 
     uint256 internal constant GLOBAL_CAP = 1_000_000 ether;
-    uint256 internal constant ALICE_LIMIT = 100 ether;
-    uint256 internal constant BOB_LIMIT = 500 ether;
 
     event StablecoinSet(address indexed stablecoin);
-    event MaxMintLimitSet(address indexed to, uint256 previousLimit, uint256 newLimit);
+    event WhitelistUpdated(address indexed to, bool flag);
     event OperatorTransferred(address indexed previousOperator, address indexed newOperator);
     event Paused(address account);
     event Unpaused(address account);
@@ -73,8 +71,8 @@ contract StablecoinAutoOwnerTest is Test {
 
         // Seed the whitelist with alice and bob.
         vm.startPrank(ctlOwner);
-        autoCtl.setMaxMintLimit(alice, ALICE_LIMIT);
-        autoCtl.setMaxMintLimit(bob, BOB_LIMIT);
+        autoCtl.setWhitelist(alice, true);
+        autoCtl.setWhitelist(bob, true);
         vm.stopPrank();
     }
 
@@ -141,20 +139,21 @@ contract StablecoinAutoOwnerTest is Test {
 
     // -------- autoMint --------
 
-    function test_AutoMint_Success_AtLimit() public {
+    function test_AutoMint_Success() public {
         uint256 seq = token.nonce();
         vm.prank(operator);
-        bool ok = autoCtl.autoMint(alice, ALICE_LIMIT, seq, block.chainid);
+        bool ok = autoCtl.autoMint(alice, 100 ether, seq, block.chainid);
         assertTrue(ok);
-        assertEq(token.balanceOf(alice), ALICE_LIMIT);
+        assertEq(token.balanceOf(alice), 100 ether);
         assertEq(token.nonce(), seq + 1);
     }
 
-    function test_AutoMint_Success_BelowLimit() public {
+    function test_AutoMint_Success_AtGlobalCap() public {
         uint256 seq = token.nonce();
         vm.prank(operator);
-        autoCtl.autoMint(alice, ALICE_LIMIT - 1, seq, block.chainid);
-        assertEq(token.balanceOf(alice), ALICE_LIMIT - 1);
+        bool ok = autoCtl.autoMint(alice, GLOBAL_CAP, seq, block.chainid);
+        assertTrue(ok);
+        assertEq(token.balanceOf(alice), GLOBAL_CAP);
     }
 
     function test_AutoMint_RevertZeroTo() public {
@@ -178,18 +177,12 @@ contract StablecoinAutoOwnerTest is Test {
         autoCtl.autoMint(charlie, 1, seq, block.chainid);
     }
 
-    function test_AutoMint_RevertPerAddressLimitExceeded() public {
+    function test_AutoMint_RevertAboveGlobalCap() public {
+        // Stablecoin.autoMint enforces the global cap.
         uint256 seq = token.nonce();
         vm.prank(operator);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                StablecoinAutoOwner.PerAddressLimitExceeded.selector,
-                alice,
-                ALICE_LIMIT + 1,
-                ALICE_LIMIT
-            )
-        );
-        autoCtl.autoMint(alice, ALICE_LIMIT + 1, seq, block.chainid);
+        vm.expectRevert();
+        autoCtl.autoMint(alice, GLOBAL_CAP + 1, seq, block.chainid);
     }
 
     function test_AutoMint_RevertNonOperator() public {
@@ -265,6 +258,26 @@ contract StablecoinAutoOwnerTest is Test {
         assertEq(token.nonce(), seq + 1);
     }
 
+    function test_AutoBurn_RevertZeroAmount() public {
+        uint256 seq = token.nonce();
+        vm.prank(operator);
+        vm.expectRevert(StablecoinAutoOwner.ZeroAmount.selector);
+        autoCtl.autoBurn(0, seq, block.chainid);
+    }
+
+    function test_AutoBurn_RevertAboveGlobalCap() public {
+        uint256 seq = token.nonce();
+        vm.prank(operator);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                StablecoinAutoOwner.AmountExceedsMaxLimit.selector,
+                GLOBAL_CAP + 1,
+                GLOBAL_CAP
+            )
+        );
+        autoCtl.autoBurn(GLOBAL_CAP + 1, seq, block.chainid);
+    }
+
     function test_AutoBurn_RevertNonOperator() public {
         uint256 seq = token.nonce();
         vm.prank(stranger);
@@ -298,23 +311,31 @@ contract StablecoinAutoOwnerTest is Test {
         autoCtl.autoBurn(1, 42, block.chainid);
     }
 
-    // -------- setMaxMintLimit --------
+    // -------- setWhitelist --------
 
-    function test_SetMaxMintLimit_Success() public {
+    function test_SetWhitelist_Add_EmitsEvent() public {
         vm.expectEmit(true, false, false, true, address(autoCtl));
-        emit MaxMintLimitSet(charlie, 0, 50 ether);
+        emit WhitelistUpdated(charlie, true);
 
         vm.prank(ctlOwner);
-        autoCtl.setMaxMintLimit(charlie, 50 ether);
+        autoCtl.setWhitelist(charlie, true);
 
-        assertEq(autoCtl.maxMintLimits(charlie), 50 ether);
-        assertEq(autoCtl.maxMintLimitOf(charlie), 50 ether);
+        assertTrue(autoCtl.isWhitelisted(charlie));
     }
 
-    function test_SetMaxMintLimit_ZeroRemoves() public {
+    function test_SetWhitelist_Remove_EmitsEvent() public {
+        vm.expectEmit(true, false, false, true, address(autoCtl));
+        emit WhitelistUpdated(alice, false);
+
         vm.prank(ctlOwner);
-        autoCtl.setMaxMintLimit(alice, 0);
-        assertEq(autoCtl.maxMintLimits(alice), 0);
+        autoCtl.setWhitelist(alice, false);
+
+        assertFalse(autoCtl.isWhitelisted(alice));
+    }
+
+    function test_SetWhitelist_RemoveBlocksMint() public {
+        vm.prank(ctlOwner);
+        autoCtl.setWhitelist(alice, false);
 
         uint256 seq = token.nonce();
         vm.prank(operator);
@@ -322,73 +343,109 @@ contract StablecoinAutoOwnerTest is Test {
         autoCtl.autoMint(alice, 1, seq, block.chainid);
     }
 
-    function test_SetMaxMintLimit_ZeroAllowedEvenWhenGlobalCapIsZero() public {
-        // Lower global cap to zero; zero-limit (remove) must still be permitted.
-        vm.prank(tokenOwner);
-        token.setAutoMintMaxLimit(0);
-
+    function test_SetWhitelist_AddIdempotent_NoEvent() public {
+        // alice already whitelisted — re-adding should not emit.
+        vm.recordLogs();
         vm.prank(ctlOwner);
-        autoCtl.setMaxMintLimit(alice, 0);
-        assertEq(autoCtl.maxMintLimits(alice), 0);
+        autoCtl.setWhitelist(alice, true);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        assertEq(logs.length, 0);
     }
 
-    function test_SetMaxMintLimit_RevertAboveGlobalCap() public {
+    function test_SetWhitelist_RemoveIdempotent_NoEvent() public {
+        // charlie was never whitelisted — removing should not emit.
+        vm.recordLogs();
         vm.prank(ctlOwner);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                StablecoinAutoOwner.LimitAboveGlobalCap.selector,
-                GLOBAL_CAP + 1,
-                GLOBAL_CAP
-            )
-        );
-        autoCtl.setMaxMintLimit(charlie, GLOBAL_CAP + 1);
+        autoCtl.setWhitelist(charlie, false);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        assertEq(logs.length, 0);
     }
 
-    function test_SetMaxMintLimit_RevertZeroAddress() public {
+    function test_SetWhitelist_RevertZeroAddress() public {
         vm.prank(ctlOwner);
         vm.expectRevert(StablecoinAutoOwner.ZeroAddress.selector);
-        autoCtl.setMaxMintLimit(address(0), 1);
+        autoCtl.setWhitelist(address(0), true);
     }
 
-    function test_SetMaxMintLimit_RevertNonOwner() public {
+    function test_SetWhitelist_RevertNonOwner() public {
         vm.prank(stranger);
         vm.expectRevert("Ownable: caller is not the owner");
-        autoCtl.setMaxMintLimit(charlie, 1);
+        autoCtl.setWhitelist(charlie, true);
     }
 
-    function test_SetMaxMintLimitBatch_Success() public {
-        address[] memory tos = new address[](2);
-        uint256[] memory limits = new uint256[](2);
-        tos[0] = charlie;
-        limits[0] = 10 ether;
-        tos[1] = alice;
-        limits[1] = 200 ether;
+    function test_SetWhitelistBatch_Success() public {
+        address[] memory addrs = new address[](2);
+        bool[] memory flags = new bool[](2);
+        addrs[0] = charlie;
+        flags[0] = true;
+        addrs[1] = alice;
+        flags[1] = false;
 
         vm.prank(ctlOwner);
-        autoCtl.setMaxMintLimitBatch(tos, limits);
+        autoCtl.setWhitelistBatch(addrs, flags);
 
-        assertEq(autoCtl.maxMintLimits(charlie), 10 ether);
-        assertEq(autoCtl.maxMintLimits(alice), 200 ether);
+        assertTrue(autoCtl.isWhitelisted(charlie));
+        assertFalse(autoCtl.isWhitelisted(alice));
+        assertTrue(autoCtl.isWhitelisted(bob));
     }
 
-    function test_SetMaxMintLimitBatch_RevertLengthMismatch() public {
-        address[] memory tos = new address[](2);
-        uint256[] memory limits = new uint256[](1);
-        tos[0] = charlie;
-        tos[1] = alice;
-        limits[0] = 10 ether;
+    function test_SetWhitelistBatch_RevertLengthMismatch() public {
+        address[] memory addrs = new address[](2);
+        bool[] memory flags = new bool[](1);
+        addrs[0] = charlie;
+        addrs[1] = alice;
+        flags[0] = true;
 
         vm.prank(ctlOwner);
         vm.expectRevert(StablecoinAutoOwner.LengthMismatch.selector);
-        autoCtl.setMaxMintLimitBatch(tos, limits);
+        autoCtl.setWhitelistBatch(addrs, flags);
     }
 
-    function test_SetMaxMintLimitBatch_RevertNonOwner() public {
-        address[] memory tos = new address[](0);
-        uint256[] memory limits = new uint256[](0);
+    function test_SetWhitelistBatch_RevertNonOwner() public {
+        address[] memory addrs = new address[](0);
+        bool[] memory flags = new bool[](0);
         vm.prank(stranger);
         vm.expectRevert("Ownable: caller is not the owner");
-        autoCtl.setMaxMintLimitBatch(tos, limits);
+        autoCtl.setWhitelistBatch(addrs, flags);
+    }
+
+    // -------- whitelist views --------
+
+    function test_Whitelist_Views() public {
+        assertTrue(autoCtl.isWhitelisted(alice));
+        assertTrue(autoCtl.isWhitelisted(bob));
+        assertFalse(autoCtl.isWhitelisted(charlie));
+
+        assertEq(autoCtl.whitelistLength(), 2);
+
+        address[] memory all = autoCtl.getWhitelist();
+        assertEq(all.length, 2);
+        // Order of EnumerableSet is insertion order until removals occur.
+        assertEq(all[0], alice);
+        assertEq(all[1], bob);
+
+        assertEq(autoCtl.whitelistAt(0), alice);
+        assertEq(autoCtl.whitelistAt(1), bob);
+    }
+
+    function test_Whitelist_ViewsAfterRemoval() public {
+        vm.prank(ctlOwner);
+        autoCtl.setWhitelist(alice, false);
+
+        assertFalse(autoCtl.isWhitelisted(alice));
+        assertTrue(autoCtl.isWhitelisted(bob));
+        assertEq(autoCtl.whitelistLength(), 1);
+
+        address[] memory all = autoCtl.getWhitelist();
+        assertEq(all.length, 1);
+        assertEq(all[0], bob);
+    }
+
+    function test_Whitelist_WhitelistAtRevertsOutOfBounds() public {
+        vm.expectRevert(
+            abi.encodeWithSelector(StablecoinAutoOwner.IndexOutOfBounds.selector, 2, 2)
+        );
+        autoCtl.whitelistAt(2);
     }
 
     // -------- pause/unpause --------
@@ -421,7 +478,6 @@ contract StablecoinAutoOwnerTest is Test {
     function test_Views_ReflectStablecoin() public {
         assertEq(autoCtl.nonce(), token.nonce());
         assertEq(autoCtl.chainId(), token.chainId());
-        assertEq(autoCtl.maxMintLimitOf(alice), ALICE_LIMIT);
 
         // After a mint, nonce advances and the view reflects it.
         uint256 seq = token.nonce();
@@ -461,7 +517,8 @@ contract StablecoinAutoOwnerTest is Test {
 
         // State preserved.
         assertEq(address(autoCtl.stablecoin()), address(token));
-        assertEq(autoCtl.maxMintLimits(alice), ALICE_LIMIT);
+        assertTrue(autoCtl.isWhitelisted(alice));
+        assertTrue(autoCtl.isWhitelisted(bob));
 
         // New method callable.
         assertEq(StablecoinAutoOwnerV2Mock(address(autoCtl)).version(), "v2");
@@ -530,10 +587,10 @@ contract StablecoinAutoOwnerTest is Test {
 
     // -------- operator role boundary (cannot escalate) --------
 
-    function test_Operator_CannotSetMaxMintLimit() public {
+    function test_Operator_CannotSetWhitelist() public {
         vm.prank(operator);
         vm.expectRevert("Ownable: caller is not the owner");
-        autoCtl.setMaxMintLimit(charlie, 1);
+        autoCtl.setWhitelist(charlie, true);
     }
 
     function test_Operator_CannotPause() public {
