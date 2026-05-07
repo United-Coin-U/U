@@ -40,7 +40,6 @@ contract DeployStablecoinAutoOwnerScript is Script {
         require(stablecoin != address(0), "STABLECOIN is zero");
         require(initialOwner != address(0), "INITIAL_OWNER is zero");
         require(operator != address(0), "OPERATOR is zero");
-        require(operator != initialOwner, "OPERATOR must differ from INITIAL_OWNER");
 
         vm.startBroadcast();
 
