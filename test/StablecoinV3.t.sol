@@ -225,4 +225,87 @@ contract StablecoinV3Test is Test {
         vm.expectRevert("Initializable: contract is already initialized");
         token.initializeV3();
     }
+
+    function test_GrantMintAndBurnRoles_SetsFlagAndEmits() public {
+        _upgradeToV3();
+
+        assertFalse(token.isCCIPMinterBurner(pool));
+
+        vm.expectEmit(true, false, false, false, address(token));
+        emit StablecoinV3.CCIPRolesGranted(pool);
+
+        vm.prank(owner);
+        token.grantMintAndBurnRoles(pool);
+
+        assertTrue(token.isCCIPMinterBurner(pool));
+    }
+
+    function test_RevokeMintAndBurnRoles_ClearsFlagAndEmits() public {
+        _upgradeToV3();
+
+        vm.prank(owner);
+        token.grantMintAndBurnRoles(pool);
+
+        vm.expectEmit(true, false, false, false, address(token));
+        emit StablecoinV3.CCIPRolesRevoked(pool);
+
+        vm.prank(owner);
+        token.revokeMintAndBurnRoles(pool);
+
+        assertFalse(token.isCCIPMinterBurner(pool));
+    }
+
+    function test_GrantMintAndBurnRoles_RevertsForNonOwner() public {
+        _upgradeToV3();
+
+        vm.expectRevert("Ownable: caller is not the owner");
+        vm.prank(alice);
+        token.grantMintAndBurnRoles(pool);
+    }
+
+    function test_RevokeMintAndBurnRoles_RevertsForNonOwner() public {
+        _upgradeToV3();
+
+        vm.prank(owner);
+        token.grantMintAndBurnRoles(pool);
+
+        vm.expectRevert("Ownable: caller is not the owner");
+        vm.prank(alice);
+        token.revokeMintAndBurnRoles(pool);
+    }
+
+    function test_GrantMintAndBurnRoles_RevertsOnZeroAddress() public {
+        _upgradeToV3();
+
+        vm.expectRevert(
+            abi.encodeWithSelector(Stablecoin.NotAllowedAddress.selector, address(0))
+        );
+        vm.prank(owner);
+        token.grantMintAndBurnRoles(address(0));
+    }
+
+    /// @dev Completes the slot-409 assertion begun in
+    ///      test_V3StorageOccupiesSlot409AndAbove: a granted entry must hash to
+    ///      the mapping rooted at 409, and nothing in V2's gap may move.
+    function test_GrantMintAndBurnRoles_WritesMappingRootedAtSlot409() public {
+        _upgradeToV3();
+
+        vm.prank(owner);
+        token.grantMintAndBurnRoles(pool);
+
+        bytes32 entry = keccak256(abi.encode(pool, SLOT_IS_CCIP_MINTER_BURNER));
+        assertEq(
+            vm.load(address(proxy), entry),
+            bytes32(uint256(1)),
+            "isCCIPMinterBurner is not rooted at slot 409"
+        );
+
+        for (uint256 slot = SLOT_V2_GAP_START; slot <= SLOT_V2_GAP_END; slot++) {
+            assertEq(
+                vm.load(address(proxy), bytes32(slot)),
+                bytes32(0),
+                "granting a role wrote into V2's __gap"
+            );
+        }
+    }
 }

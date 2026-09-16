@@ -47,6 +47,17 @@ contract StablecoinV3 is StablecoinV2 {
     uint256[48] private __gapV3;
 
     /**
+     * @dev Throws if the caller is neither the owner nor a CCIP minter/burner.
+     */
+    modifier onlyOwnerOrCCIP() {
+        require(
+            msg.sender == owner() || isCCIPMinterBurner[msg.sender],
+            CallerNotOwnerOrCCIP(msg.sender)
+        );
+        _;
+    }
+
+    /**
      * @dev Disable initializers for the implementation contract.
      */
     constructor() {
@@ -62,5 +73,29 @@ contract StablecoinV3 is StablecoinV2 {
     function initializeV3() public reinitializer(3) {
         emit CCIPAdminTransferred(_ccipAdmin, owner());
         _ccipAdmin = owner();
+    }
+
+    /**
+     * @dev Permit `pool` to mint and burn, in addition to the owner. Intended for
+     *      the Chainlink BurnMintTokenPool deployed for this token on this chain.
+     * @param pool Token pool address
+     * Can only be called by the current owner.
+     */
+    function grantMintAndBurnRoles(address pool) external onlyOwner {
+        require(pool != address(0), NotAllowedAddress(pool));
+        isCCIPMinterBurner[pool] = true;
+        emit CCIPRolesGranted(pool);
+    }
+
+    /**
+     * @dev Revoke a pool's permission to mint and burn. Required when rotating to
+     *      a redeployed token pool, since a pool's allowlist mode cannot be
+     *      changed in place.
+     * @param pool Token pool address
+     * Can only be called by the current owner.
+     */
+    function revokeMintAndBurnRoles(address pool) external onlyOwner {
+        delete isCCIPMinterBurner[pool];
+        emit CCIPRolesRevoked(pool);
     }
 }
