@@ -499,4 +499,67 @@ contract StablecoinV3Test is Test {
         vm.prank(alice);
         token.transfer(pool, 20e18);
     }
+
+    function test_GetCCIPAdmin_DefaultsToOwnerAfterInitializeV3() public {
+        _upgradeToV3();
+        assertEq(token.getCCIPAdmin(), owner);
+    }
+
+    function test_SetCCIPAdmin_UpdatesAndEmits() public {
+        _upgradeToV3();
+
+        vm.expectEmit(true, true, false, false, address(token));
+        emit StablecoinV3.CCIPAdminTransferred(owner, alice);
+
+        vm.prank(owner);
+        token.setCCIPAdmin(alice);
+
+        assertEq(token.getCCIPAdmin(), alice);
+    }
+
+    function test_SetCCIPAdmin_RevertsForNonOwner() public {
+        _upgradeToV3();
+
+        vm.expectRevert("Ownable: caller is not the owner");
+        vm.prank(alice);
+        token.setCCIPAdmin(alice);
+    }
+
+    function test_SetCCIPAdmin_RevertsOnZeroAddress() public {
+        _upgradeToV3();
+
+        vm.expectRevert(
+            abi.encodeWithSelector(Stablecoin.NotAllowedAddress.selector, address(0))
+        );
+        vm.prank(owner);
+        token.setCCIPAdmin(address(0));
+    }
+
+    /// @dev Defense in depth: if initializeV3 were ever skipped during an
+    ///      upgrade, getCCIPAdmin must still return a usable address rather than
+    ///      address(0), which would make Chainlink's registration path unusable.
+    function test_GetCCIPAdmin_FallsBackToOwnerWhenSlotUnset() public {
+        _upgradeToV3();
+
+        vm.store(address(proxy), bytes32(SLOT_CCIP_ADMIN), bytes32(0));
+
+        assertEq(token.getCCIPAdmin(), owner);
+    }
+
+    /// @dev The CCIP admin role is decoupled from ownership once set, so
+    ///      transferring ownership must not silently move the CCIP admin.
+    function test_CCIPAdmin_IsIndependentOfOwnershipTransfer() public {
+        _upgradeToV3();
+
+        vm.prank(owner);
+        token.setCCIPAdmin(alice);
+
+        vm.prank(owner);
+        token.transferOwnership(bob);
+        vm.prank(bob);
+        token.acceptOwnership();
+
+        assertEq(token.owner(), bob);
+        assertEq(token.getCCIPAdmin(), alice);
+    }
 }

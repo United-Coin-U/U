@@ -149,4 +149,29 @@ contract StablecoinV3 is StablecoinV2 {
         emit Burn(_msgSender(), _msgSender(), amount);
         return true;
     }
+
+    /**
+     * @dev Set the CCIP Token Administrator, the address Chainlink's
+     *      RegistryModuleOwnerCustom.registerAdminViaGetCCIPAdmin accepts as the
+     *      registrant. Keeping it separate from `owner()` means routine CCIP
+     *      administration does not require the owner multisig.
+     * @param admin New CCIP administrator
+     * Can only be called by the current owner.
+     */
+    function setCCIPAdmin(address admin) external onlyOwner {
+        require(admin != address(0), NotAllowedAddress(admin));
+        emit CCIPAdminTransferred(_ccipAdmin, admin);
+        _ccipAdmin = admin;
+    }
+
+    /**
+     * @dev Returns the CCIP Token Administrator, as required by Chainlink's
+     *      TokenAdminRegistry registration flow. Falls back to `owner()` when
+     *      unset so registration is never blocked by a zero address.
+     * @return The CCIP administrator address
+     */
+    function getCCIPAdmin() external view returns (address) {
+        address admin = _ccipAdmin;
+        return admin == address(0) ? owner() : admin;
+    }
 }
