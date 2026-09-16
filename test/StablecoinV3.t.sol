@@ -8,6 +8,8 @@ import "../src/StablecoinV3.sol";
 import "./utils/MockBurnMintPool.sol";
 
 contract StablecoinV3Test is Test {
+    event GasMeasurement(uint256 indexed gasUsed);
+
     string internal constant NAME = "United Stables";
     string internal constant SYMBOL = "U";
 
@@ -21,6 +23,13 @@ contract StablecoinV3Test is Test {
     // Nonce used solely to write a deterministic entry into `_authorizationStates`
     // (slot 359) via `cancelAuthorization`, which needs no signature.
     bytes32 internal constant INVARIANCE_NONCE = keccak256("invariance");
+
+    /// @dev Chainlink's default destination-chain allowance for
+    ///      releaseOrMint + token logic + balanceOf is 90,000 gas. We budget
+    ///      65,000 for the token's mint alone, leaving ~25,000 for the real
+    ///      pool's own logic. Raising this number is a decision, not a fix:
+    ///      it means configuring a custom per-lane gas limit before go-live.
+    uint256 internal constant MINT_GAS_BUDGET = 65_000;
 
     StablecoinV3 internal token;
     ProxyAdmin internal proxyAdmin;
@@ -651,5 +660,27 @@ contract StablecoinV3Test is Test {
         token.transferWithAuthorization(
             owner, alice, value, 0, validBefore, authNonce, v, r, s
         );
+    }
+
+    function test_MintGas_ColdPath_FitsCCIPBudget() public {
+        _upgradeToV3();
+
+        MockBurnMintPool ccipPool = new MockBurnMintPool(address(token));
+
+        vm.prank(owner);
+        token.grantMintAndBurnRoles(address(ccipPool));
+
+        // Worst case: a first-time holder (cold, zero -> non-zero balance SSTORE)
+        // whose `frozen` slot has never been touched.
+        address freshReceiver = address(0xFEE1);
+        assertEq(token.balanceOf(freshReceiver), 0, "receiver not fresh");
+
+        uint256 gasBefore = gasleft();
+        ccipPool.releaseOrMint(freshReceiver, 1e18);
+        uint256 gasUsed = gasBefore - gasleft();
+
+        emit GasMeasurement(gasUsed);
+        console.log("StablecoinV3.mint cold-path gas:", gasUsed);
+        assertLt(gasUsed, MINT_GAS_BUDGET, "mint exceeds the CCIP gas budget");
     }
 }
