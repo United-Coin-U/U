@@ -408,4 +408,95 @@ contract StablecoinV3Test is Test {
 
         assertEq(token.balanceOf(alice), 260e18 + limit * 10);
     }
+
+    function test_Burn_BurnsFromCallerBalanceForGrantedPool() public {
+        _upgradeToV3();
+
+        vm.startPrank(owner);
+        token.grantMintAndBurnRoles(pool);
+        token.transfer(pool, 40e18);
+        vm.stopPrank();
+
+        uint256 supplyBefore = token.totalSupply();
+
+        vm.prank(pool);
+        bool ok = token.burn(40e18);
+
+        assertTrue(ok);
+        assertEq(token.balanceOf(pool), 0, "pool balance not burned");
+        assertEq(token.totalSupply(), supplyBefore - 40e18, "totalSupply");
+    }
+
+    function test_Burn_StillAllowedForOwner() public {
+        _upgradeToV3();
+
+        uint256 supplyBefore = token.totalSupply();
+
+        vm.prank(owner);
+        token.burn(10e18);
+
+        assertEq(token.totalSupply(), supplyBefore - 10e18);
+    }
+
+    function test_Burn_RevertsForArbitraryCaller() public {
+        _upgradeToV3();
+
+        vm.expectRevert(
+            abi.encodeWithSelector(StablecoinV3.CallerNotOwnerOrCCIP.selector, alice)
+        );
+        vm.prank(alice);
+        token.burn(1e18);
+    }
+
+    function test_Burn_RevertsForRevokedPool() public {
+        _upgradeToV3();
+
+        vm.startPrank(owner);
+        token.grantMintAndBurnRoles(pool);
+        token.transfer(pool, 5e18);
+        token.revokeMintAndBurnRoles(pool);
+        vm.stopPrank();
+
+        vm.expectRevert(
+            abi.encodeWithSelector(StablecoinV3.CallerNotOwnerOrCCIP.selector, pool)
+        );
+        vm.prank(pool);
+        token.burn(5e18);
+    }
+
+    /// @dev Spec §5.1: burn deliberately does NOT gain whenNotPaused, matching V1.
+    ///      Pause is already enforced on the outbound path, because the Router's
+    ///      transfer of tokens into the pool goes through the paused _transfer.
+    function test_Burn_IsNotBlockedByPause() public {
+        _upgradeToV3();
+
+        vm.startPrank(owner);
+        token.grantMintAndBurnRoles(pool);
+        token.transfer(pool, 7e18);
+        token.pause();
+        vm.stopPrank();
+
+        vm.prank(pool);
+        token.burn(7e18);
+
+        assertEq(token.balanceOf(pool), 0);
+    }
+
+    /// @dev The freeze check on _transfer is what actually stops a frozen holder
+    ///      from bridging out, before any burn happens.
+    function test_FrozenHolderCannotTransferIntoPool() public {
+        _upgradeToV3();
+
+        vm.startPrank(owner);
+        token.grantMintAndBurnRoles(pool);
+        token.transfer(alice, 20e18);
+        token.freeze(alice);
+        vm.stopPrank();
+
+        vm.expectRevert(
+            abi.encodeWithSelector(Stablecoin.FrozenAddress.selector, alice)
+        );
+        vm.prank(alice);
+        token.transfer(pool, 20e18);
+    }
 }

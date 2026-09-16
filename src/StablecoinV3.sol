@@ -125,4 +125,28 @@ contract StablecoinV3 is StablecoinV2 {
         emit Mint(_msgSender(), to, amount);
         return true;
     }
+
+    /**
+     * @dev See {Stablecoin-burn}. Widened to accept a CCIP token pool in addition
+     *      to the owner; this is the function Chainlink's BurnMintTokenPool calls
+     *      on the source chain, burning the tokens the Router just transferred
+     *      into the pool.
+     *
+     *      `whenNotPaused` is deliberately omitted, matching V1: pause already
+     *      blocks the outbound path, because moving tokens into the pool goes
+     *      through `_transfer`.
+     * @param amount Burn amount
+     * @return True if successful
+     */
+    function burn(uint256 amount)
+        external
+        virtual
+        override
+        onlyOwnerOrCCIP
+        returns (bool)
+    {
+        _burn(_msgSender(), amount);
+        emit Burn(_msgSender(), _msgSender(), amount);
+        return true;
+    }
 }
