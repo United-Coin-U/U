@@ -17,6 +17,10 @@ contract StablecoinV3Test is Test {
     uint256 internal constant SLOT_CCIP_ADMIN = 410;
     uint256 internal constant SLOT_GAP_V3_START = 411;
 
+    // Nonce used solely to write a deterministic entry into `_authorizationStates`
+    // (slot 359) via `cancelAuthorization`, which needs no signature.
+    bytes32 internal constant INVARIANCE_NONCE = keccak256("invariance");
+
     StablecoinV3 internal token;
     ProxyAdmin internal proxyAdmin;
     TransparentUpgradeableProxy internal proxy;
@@ -29,8 +33,13 @@ contract StablecoinV3Test is Test {
     address internal pool;
 
     /// @dev Deploys the proxy on Stablecoin, upgrades it to V2, and populates
-    ///      state on every V1/V2 storage slot so the V3 upgrade has something
-    ///      meaningful to preserve.
+    ///      most V1/V2 storage-backed values (balances, frozen, nonce, chainId,
+    ///      autoOwner, autoMintMaxLimit) so the V3 upgrade has something
+    ///      meaningful to preserve. `test_UpgradeToV3_PreservesAllExistingState`
+    ///      populates the remaining storage-backed values (an allowance,
+    ///      `_authorizationStates`, and `_paused`) itself, immediately before
+    ///      taking its snapshot, because pausing here would block every other
+    ///      test in this file that shares this fixture.
     function setUp() public {
         ownerPrivateKey = 0xA11CE;
         owner = vm.addr(ownerPrivateKey);
@@ -103,6 +112,8 @@ contract StablecoinV3Test is Test {
         address owner;
         bool paused;
         bytes32 domainSeparator;
+        uint256 allowanceAliceFromOwner;
+        bool authorizationUsed;
     }
 
     function _snapshot() internal view returns (Snapshot memory s) {
@@ -121,9 +132,21 @@ contract StablecoinV3Test is Test {
         s.owner = token.owner();
         s.paused = token.paused();
         s.domainSeparator = token.DOMAIN_SEPARATOR();
+        s.allowanceAliceFromOwner = token.allowance(owner, alice);
+        s.authorizationUsed = token.authorizationState(owner, INVARIANCE_NONCE);
     }
 
     function test_UpgradeToV3_PreservesAllExistingState() public {
+        // Populate the storage-backed values the base fixture leaves untouched, so
+        // this test can actually detect corruption of them. Confined to this test
+        // body (not setUp()) so no other test in this file is affected — Foundry
+        // re-runs setUp() fresh per test.
+        vm.startPrank(owner);
+        token.approve(alice, 123e18);                        // allowance
+        token.cancelAuthorization(owner, INVARIANCE_NONCE);   // _authorizationStates slot 359
+        token.pause();                                        // _paused slot 304
+        vm.stopPrank();
+
         // Snapshot every V1/V2 storage-backed value before the upgrade.
         Snapshot memory before = _snapshot();
 
@@ -131,6 +154,9 @@ contract StablecoinV3Test is Test {
 
         assertEq(token.name(), before.name, "name");
         assertEq(token.symbol(), before.symbol, "symbol");
+        // decimals() on ERC20Upgradeable returns the literal 18 and reads no
+        // storage slot, so this assertion documents intent rather than
+        // detecting corruption.
         assertEq(token.decimals(), before.decimals, "decimals");
         assertEq(token.totalSupply(), before.totalSupply, "totalSupply");
         assertEq(token.balanceOf(owner), before.ownerBalance, "owner balance");
@@ -144,11 +170,20 @@ contract StablecoinV3Test is Test {
         assertEq(token.owner(), before.owner, "owner");
         assertEq(token.paused(), before.paused, "paused");
         assertEq(token.DOMAIN_SEPARATOR(), before.domainSeparator, "DOMAIN_SEPARATOR");
+        assertEq(token.allowance(owner, alice), before.allowanceAliceFromOwner, "allowance");
+        assertEq(
+            token.authorizationState(owner, INVARIANCE_NONCE),
+            before.authorizationUsed,
+            "authorizationState"
+        );
 
         // Sanity: the snapshot was not trivially empty.
         assertGt(before.totalSupply, 0, "fixture minted nothing");
         assertGt(before.nonce, 0, "fixture left nonce at zero");
         assertTrue(before.bobFrozen, "fixture froze nobody");
+        assertGt(before.allowanceAliceFromOwner, 0, "fixture set no allowance");
+        assertTrue(before.authorizationUsed, "fixture consumed no authorization");
+        assertTrue(before.paused, "fixture did not pause");
     }
 
     function test_V3StorageOccupiesSlot409AndAbove() public {
