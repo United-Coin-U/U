@@ -308,4 +308,104 @@ contract StablecoinV3Test is Test {
             );
         }
     }
+
+    function test_Mint_AllowedForGrantedPool() public {
+        _upgradeToV3();
+
+        vm.prank(owner);
+        token.grantMintAndBurnRoles(pool);
+
+        uint256 supplyBefore = token.totalSupply();
+
+        vm.prank(pool);
+        bool ok = token.mint(alice, 100e18);
+
+        assertTrue(ok);
+        assertEq(token.totalSupply(), supplyBefore + 100e18);
+        assertEq(token.balanceOf(alice), 260e18 + 100e18);
+    }
+
+    function test_Mint_StillAllowedForOwner() public {
+        _upgradeToV3();
+
+        uint256 supplyBefore = token.totalSupply();
+
+        vm.prank(owner);
+        token.mint(alice, 5e18);
+
+        assertEq(token.totalSupply(), supplyBefore + 5e18);
+    }
+
+    function test_Mint_RevertsForRevokedPool() public {
+        _upgradeToV3();
+
+        vm.startPrank(owner);
+        token.grantMintAndBurnRoles(pool);
+        token.revokeMintAndBurnRoles(pool);
+        vm.stopPrank();
+
+        vm.expectRevert(
+            abi.encodeWithSelector(StablecoinV3.CallerNotOwnerOrCCIP.selector, pool)
+        );
+        vm.prank(pool);
+        token.mint(alice, 1e18);
+    }
+
+    function test_Mint_RevertsForArbitraryCaller() public {
+        _upgradeToV3();
+
+        vm.expectRevert(
+            abi.encodeWithSelector(StablecoinV3.CallerNotOwnerOrCCIP.selector, alice)
+        );
+        vm.prank(alice);
+        token.mint(alice, 1e18);
+    }
+
+    /// @dev Spec §6: CCIP mint is NOT exempt from the freeze check. A frozen
+    ///      recipient makes the destination-chain mint revert, which strands the
+    ///      CCIP message. That is the accepted trade-off; pre-flight checks in
+    ///      the submitting service are the mitigation.
+    function test_Mint_RevertsWhenRecipientFrozen() public {
+        _upgradeToV3();
+
+        vm.prank(owner);
+        token.grantMintAndBurnRoles(pool);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(Stablecoin.FrozenAddress.selector, bob)
+        );
+        vm.prank(pool);
+        token.mint(bob, 1e18);
+    }
+
+    /// @dev Spec §6: CCIP mint is NOT exempt from pause either.
+    function test_Mint_RevertsWhenPaused() public {
+        _upgradeToV3();
+
+        vm.startPrank(owner);
+        token.grantMintAndBurnRoles(pool);
+        token.pause();
+        vm.stopPrank();
+
+        vm.expectRevert("Pausable: paused");
+        vm.prank(pool);
+        token.mint(alice, 1e18);
+    }
+
+    /// @dev Spec §7: the CCIP path is bounded only by the pool's CCIP rate
+    ///      limiter, not by autoMintMaxLimit. Accepted and recorded.
+    function test_Mint_ByPoolIsNotBoundedByAutoMintMaxLimit() public {
+        _upgradeToV3();
+
+        vm.prank(owner);
+        token.grantMintAndBurnRoles(pool);
+
+        uint256 limit = token.autoMintMaxLimit();
+        assertGt(limit, 0, "fixture left autoMintMaxLimit at zero");
+
+        vm.prank(pool);
+        token.mint(alice, limit * 10);
+
+        assertEq(token.balanceOf(alice), 260e18 + limit * 10);
+    }
 }

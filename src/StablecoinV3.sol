@@ -98,4 +98,31 @@ contract StablecoinV3 is StablecoinV2 {
         delete isCCIPMinterBurner[pool];
         emit CCIPRolesRevoked(pool);
     }
+
+    /**
+     * @dev See {Stablecoin-mint}. Widened to accept a CCIP token pool in addition
+     *      to the owner; this is the function Chainlink's BurnMintTokenPool calls
+     *      on the destination chain.
+     *
+     *      The freeze and pause checks are deliberately retained on this path: a
+     *      regulated stablecoin must not mint to a frozen address or while
+     *      paused, even though a revert here strands the in-flight CCIP message
+     *      until it is manually re-executed.
+     * @param to Mint to address
+     * @param amount Mint amount
+     * @return True if successful
+     */
+    function mint(address to, uint256 amount)
+        external
+        virtual
+        override
+        whenNotPaused
+        notFrozen(to)
+        onlyOwnerOrCCIP
+        returns (bool)
+    {
+        _mint(to, amount);
+        emit Mint(_msgSender(), to, amount);
+        return true;
+    }
 }
