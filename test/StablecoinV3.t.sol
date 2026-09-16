@@ -5,6 +5,7 @@ import "forge-std/Test.sol";
 import "openzeppelin-contracts/contracts/proxy/transparent/ProxyAdmin.sol";
 import "openzeppelin-contracts/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 import "../src/StablecoinV3.sol";
+import "./utils/MockBurnMintPool.sol";
 
 contract StablecoinV3Test is Test {
     string internal constant NAME = "United Stables";
@@ -561,5 +562,94 @@ contract StablecoinV3Test is Test {
 
         assertEq(token.owner(), bob);
         assertEq(token.getCCIPAdmin(), alice);
+    }
+
+    function test_PoolRoundTrip_BurnThenMintViaReturnlessInterface() public {
+        _upgradeToV3();
+
+        MockBurnMintPool ccipPool = new MockBurnMintPool(address(token));
+
+        vm.startPrank(owner);
+        token.grantMintAndBurnRoles(address(ccipPool));
+        token.transfer(address(ccipPool), 30e18);
+        vm.stopPrank();
+
+        uint256 supplyBefore = token.totalSupply();
+
+        // Source chain: the Router has moved tokens into the pool, pool burns them.
+        ccipPool.lockOrBurn(30e18);
+        assertEq(token.balanceOf(address(ccipPool)), 0, "pool not emptied");
+        assertEq(token.totalSupply(), supplyBefore - 30e18, "burn not reflected");
+
+        // Destination chain: pool mints to the receiver.
+        ccipPool.releaseOrMint(alice, 30e18);
+        assertEq(token.balanceOf(alice), 260e18 + 30e18, "receiver not credited");
+        assertEq(token.totalSupply(), supplyBefore, "supply not restored");
+    }
+
+    function test_PoolRoundTrip_RevertsAfterRoleRevoked() public {
+        _upgradeToV3();
+
+        MockBurnMintPool ccipPool = new MockBurnMintPool(address(token));
+
+        vm.startPrank(owner);
+        token.grantMintAndBurnRoles(address(ccipPool));
+        token.revokeMintAndBurnRoles(address(ccipPool));
+        vm.stopPrank();
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                StablecoinV3.CallerNotOwnerOrCCIP.selector, address(ccipPool)
+            )
+        );
+        ccipPool.releaseOrMint(alice, 1e18);
+    }
+
+    function test_EIP7598_StillWorksUnderV3() public {
+        _upgradeToV3();
+
+        assertTrue(token.eip7598EnableFlag(), "flag lost across upgrade");
+
+        bytes32 authNonce = keccak256("v3-regression");
+        uint256 validBefore = block.timestamp + 1 days;
+        uint256 value = 3e18;
+
+        // structHash is inlined directly into the digest computation (rather than
+        // held in its own local) to stay within the EVM stack depth under this
+        // project's legacy (non-via-IR) codegen — see the Snapshot struct comment
+        // above for the same constraint hit elsewhere in this file.
+        bytes32 digest = keccak256(
+            abi.encodePacked(
+                "\x19\x01",
+                token.DOMAIN_SEPARATOR(),
+                keccak256(
+                    abi.encode(
+                        EIP7598Constants.TRANSFER_WITH_AUTHORIZATION_TYPEHASH,
+                        owner,
+                        alice,
+                        value,
+                        uint256(0),
+                        validBefore,
+                        authNonce
+                    )
+                )
+            )
+        );
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(ownerPrivateKey, digest);
+
+        uint256 aliceBefore = token.balanceOf(alice);
+
+        token.transferWithAuthorization(
+            owner, alice, value, 0, validBefore, authNonce, v, r, s
+        );
+
+        assertEq(token.balanceOf(alice), aliceBefore + value, "transfer did not settle");
+        assertTrue(token.authorizationState(owner, authNonce), "nonce not consumed");
+
+        // Replay must still be rejected.
+        vm.expectRevert("Authorization already used");
+        token.transferWithAuthorization(
+            owner, alice, value, 0, validBefore, authNonce, v, r, s
+        );
     }
 }
