@@ -8,8 +8,6 @@ import "../src/StablecoinV3.sol";
 import "./utils/MockBurnMintPool.sol";
 
 contract StablecoinV3Test is Test {
-    event GasMeasurement(uint256 indexed gasUsed);
-
     string internal constant NAME = "United Stables";
     string internal constant SYMBOL = "U";
 
@@ -24,12 +22,27 @@ contract StablecoinV3Test is Test {
     // (slot 359) via `cancelAuthorization`, which needs no signature.
     bytes32 internal constant INVARIANCE_NONCE = keccak256("invariance");
 
-    /// @dev Chainlink's default destination-chain allowance for
-    ///      releaseOrMint + token logic + balanceOf is 90,000 gas. We budget
-    ///      65,000 for the token's mint alone, leaving ~25,000 for the real
-    ///      pool's own logic. Raising this number is a decision, not a fix:
-    ///      it means configuring a custom per-lane gas limit before go-live.
-    uint256 internal constant MINT_GAS_BUDGET = 65_000;
+    /// @dev Measured cold-path gas for StablecoinV3.mint, kept deliberately tight:
+    ///      the headroom is smaller than one cold SLOAD (~2,100), so adding a single
+    ///      storage read or a new event to `mint` will trip this test. That is the
+    ///      point — bump this number consciously when `mint` legitimately changes,
+    ///      never to make a red test green.
+    uint256 internal constant MINT_GAS_BUDGET = 38_000;
+
+    /// @dev Three slots `mint` reads are already warm inside a single Foundry test
+    ///      transaction (`_owner` and `isCCIPMinterBurner[pool]` from the preceding
+    ///      grant, `_balances[receiver]` from this test's own precondition read).
+    ///      On chain all three are cold, ~2,100 each instead of ~100, so real
+    ///      cold-path cost is about this much higher than what we measure here.
+    uint256 internal constant COLD_SLOT_ADJUSTMENT = 6_000;
+
+    /// @dev Reserve for the real BurnMintTokenPool's own releaseOrMint logic and its
+    ///      balanceOf call, which also count against Chainlink's ceiling. Our mock is
+    ///      thinner than the real pool, so this is not captured by the measurement.
+    uint256 internal constant CCIP_POOL_RESERVE = 25_000;
+
+    /// @dev Chainlink's default destination-chain allowance.
+    uint256 internal constant CCIP_DEFAULT_GAS_LIMIT = 90_000;
 
     StablecoinV3 internal token;
     ProxyAdmin internal proxyAdmin;
@@ -670,8 +683,9 @@ contract StablecoinV3Test is Test {
         vm.prank(owner);
         token.grantMintAndBurnRoles(address(ccipPool));
 
-        // Worst case: a first-time holder (cold, zero -> non-zero balance SSTORE)
-        // whose `frozen` slot has never been touched.
+        // Worst case: a first-time holder, cold `frozen` slot. Note: three slots are
+        // already warm from the preceding grant and this test's own precondition read,
+        // so the measured figure understates the on-chain cold-path cost by ~6,000 gas.
         address freshReceiver = address(0xFEE1);
         assertEq(token.balanceOf(freshReceiver), 0, "receiver not fresh");
 
@@ -679,8 +693,16 @@ contract StablecoinV3Test is Test {
         ccipPool.releaseOrMint(freshReceiver, 1e18);
         uint256 gasUsed = gasBefore - gasleft();
 
-        emit GasMeasurement(gasUsed);
         console.log("StablecoinV3.mint cold-path gas:", gasUsed);
-        assertLt(gasUsed, MINT_GAS_BUDGET, "mint exceeds the CCIP gas budget");
+
+        // Regression guard: tight by design.
+        assertLt(gasUsed, MINT_GAS_BUDGET, "mint gas regressed - see MINT_GAS_BUDGET comment before changing it");
+
+        // Operational ceiling: does the whole destination-chain execution still fit?
+        assertLt(
+            gasUsed + COLD_SLOT_ADJUSTMENT + CCIP_POOL_RESERVE,
+            CCIP_DEFAULT_GAS_LIMIT,
+            "adjusted cold-path cost plus pool reserve exceeds Chainlink's default 90k limit"
+        );
     }
 }
