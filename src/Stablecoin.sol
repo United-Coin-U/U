@@ -123,7 +123,7 @@ contract Stablecoin is ERC20PermitUpgradeable, Ownable2StepUpgradeable, Pausable
      * @return True if successful
      * Can only be called by the current owner.
      */
-    function mint(address to, uint256 amount) external whenNotPaused notFrozen(to) onlyOwner returns (bool) {
+    function mint(address to, uint256 amount) external virtual whenNotPaused notFrozen(to) onlyOwner returns (bool) {
         _mint(to, amount);
         emit Mint(_msgSender(), to, amount);
         return true;
@@ -156,7 +156,7 @@ contract Stablecoin is ERC20PermitUpgradeable, Ownable2StepUpgradeable, Pausable
      * @return True if successful
      * Can only be called by the current owner.
      */
-    function burn(uint256 amount) external onlyOwner returns (bool) {
+    function burn(uint256 amount) external virtual onlyOwner returns (bool) {
         _burn(_msgSender(), amount);
         emit Burn(_msgSender(), _msgSender(), amount);
         return true;
