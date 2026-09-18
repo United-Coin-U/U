@@ -19,7 +19,7 @@ contract StablecoinTest is Test {
     address internal autoOwner;
 
     function setUp() public {
-        ownerPrivateKey = 0xA11CE;
+        ownerPrivateKey = 0xA11CE;//
         spenderPrivateKey = 0xB0B;
         autoOwnerPrivateKey = 0xC0C;
 
