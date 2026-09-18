@@ -2,7 +2,7 @@
 
 pragma solidity ^0.8.0;
 
-import "../../src/Stablecoin.sol";
+import "../../src/StablecoinV2.sol";
 
-contract MockERC20 is Stablecoin {
+contract MockERC20 is StablecoinV2 {
 }

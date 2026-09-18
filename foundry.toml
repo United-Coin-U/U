@@ -9,5 +9,4 @@ solc_version = "0.8.28"
 optimizer = true          # 启用优化器
 optimizer_runs = 200      # 设置 optimizer 的 runs 参数，默认 200
 
-
 # See more config options https://github.com/foundry-rs/foundry/tree/master/config
