@@ -17,16 +17,6 @@ import "./StablecoinV2.sol";
  *
  * Total new slots used: 2
  * Gap size: 48 (50 - 2 = 48)
- *
- * IMPORTANT: StablecoinV2's own `__gap` (slots 361-408) is deliberately left
- * untouched, so this contract appends at slot 409. That supersedes the guidance
- * in StablecoinV2.sol, which tells future versions to consume V2's gap; doing so
- * would require editing StablecoinV2.sol, which this upgrade explicitly avoids.
- *
- * When adding new state variables in a future upgrade (V4, etc.):
- * 1. Add new variables BEFORE `__gapV3`
- * 2. Reduce `__gapV3` by the number of slots used
- * 3. Verify with `forge inspect StablecoinV4 storage-layout`
  */
 contract StablecoinV3 is StablecoinV2 {
 
@@ -51,8 +41,8 @@ contract StablecoinV3 is StablecoinV2 {
      */
     modifier onlyOwnerOrCCIP() {
         require(
-            msg.sender == owner() || isCCIPMinterBurner[msg.sender],
-            CallerNotOwnerOrCCIP(msg.sender)
+            _msgSender() == owner() || isCCIPMinterBurner[_msgSender()],
+            CallerNotOwnerOrCCIP(_msgSender())
         );
         _;
     }
@@ -66,13 +56,19 @@ contract StablecoinV3 is StablecoinV2 {
 
     /**
      * @dev Initialize the contract for the V3 upgrade. Seeds the CCIP
-     *      administrator with the current owner so the token is registrable with
-     *      Chainlink's TokenAdminRegistry immediately after the upgrade; the
-     *      owner can decouple the two later via {setCCIPAdmin}.
+     *      administrator with the address chosen at upgrade time so the token is
+     *      registrable with Chainlink's TokenAdminRegistry immediately after the
+     *      upgrade; the owner can rotate it later via {setCCIPAdmin}.
+     *
+     *      The zero address is rejected rather than silently falling back to
+     *      `owner()`, so a mis-encoded `upgradeAndCall` payload fails loudly at
+     *      upgrade time instead of leaving the role implicitly on the owner.
+     * @param ccipAdmin Initial CCIP administrator
      */
-    function initializeV3() public reinitializer(3) {
-        emit CCIPAdminTransferred(_ccipAdmin, owner());
-        _ccipAdmin = owner();
+    function initializeV3(address ccipAdmin) public reinitializer(3) {
+        require(ccipAdmin != address(0), NotAllowedAddress(ccipAdmin));
+        emit CCIPAdminTransferred(_ccipAdmin, ccipAdmin);
+        _ccipAdmin = ccipAdmin;
     }
 
     /**
@@ -114,7 +110,6 @@ contract StablecoinV3 is StablecoinV2 {
      */
     function mint(address to, uint256 amount)
         external
-        virtual
         override
         whenNotPaused
         notFrozen(to)
@@ -140,7 +135,6 @@ contract StablecoinV3 is StablecoinV2 {
      */
     function burn(uint256 amount)
         external
-        virtual
         override
         onlyOwnerOrCCIP
         returns (bool)

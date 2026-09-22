@@ -55,6 +55,11 @@ contract StablecoinV3Test is Test {
     address internal bob;
     address internal pool;
 
+    /// @dev Deliberately distinct from `owner`, so every assertion about the
+    ///      seeded CCIP admin proves initializeV3 used the address passed at
+    ///      upgrade time rather than falling back to the owner.
+    address internal ccipAdmin;
+
     /// @dev Deploys the proxy on Stablecoin, upgrades it to V2, and populates
     ///      most V1/V2 storage-backed values (balances, frozen, nonce, chainId,
     ///      autoOwner, autoMintMaxLimit) so the V3 upgrade has something
@@ -70,6 +75,7 @@ contract StablecoinV3Test is Test {
         alice = vm.addr(0xA11);
         bob = vm.addr(0xB0B);
         pool = address(0xCC1B);
+        ccipAdmin = vm.addr(0xADD11);
 
         vm.startPrank(owner);
 
@@ -109,7 +115,7 @@ contract StablecoinV3Test is Test {
         proxyAdmin.upgradeAndCall(
             proxy,
             address(v3Impl),
-            abi.encodeWithSelector(StablecoinV3.initializeV3.selector)
+            abi.encodeWithSelector(StablecoinV3.initializeV3.selector, ccipAdmin)
         );
         vm.stopPrank();
     }
@@ -224,7 +230,7 @@ contract StablecoinV3Test is Test {
         // initializeV3 sets _ccipAdmin at slot 410.
         assertEq(
             vm.load(address(proxy), bytes32(SLOT_CCIP_ADMIN)),
-            bytes32(uint256(uint160(owner))),
+            bytes32(uint256(uint160(ccipAdmin))),
             "_ccipAdmin is not at slot 410"
         );
 
@@ -246,7 +252,7 @@ contract StablecoinV3Test is Test {
     function test_InitializeV3_CannotBeCalledTwice() public {
         _upgradeToV3();
         vm.expectRevert("Initializable: contract is already initialized");
-        token.initializeV3();
+        token.initializeV3(ccipAdmin);
     }
 
     function test_GrantMintAndBurnRoles_SetsFlagAndEmits() public {
@@ -523,16 +529,49 @@ contract StablecoinV3Test is Test {
         token.transfer(pool, 20e18);
     }
 
-    function test_GetCCIPAdmin_DefaultsToOwnerAfterInitializeV3() public {
+    /// @dev The whole point of the `initializeV3(address)` parameter: the admin
+    ///      is whatever the upgrade call specified, not implicitly the owner.
+    function test_GetCCIPAdmin_IsUpgradeTimeAddressAfterInitializeV3() public {
         _upgradeToV3();
-        assertEq(token.getCCIPAdmin(), owner);
+        assertEq(token.getCCIPAdmin(), ccipAdmin);
+        assertTrue(ccipAdmin != owner, "fixture admin must differ from owner");
+    }
+
+    function test_InitializeV3_EmitsTransferFromZeroToSeededAdmin() public {
+        vm.startPrank(owner);
+        StablecoinV3 v3Impl = new StablecoinV3();
+
+        vm.expectEmit(true, true, false, false, address(proxy));
+        emit StablecoinV3.CCIPAdminTransferred(address(0), ccipAdmin);
+
+        proxyAdmin.upgradeAndCall(
+            proxy,
+            address(v3Impl),
+            abi.encodeWithSelector(StablecoinV3.initializeV3.selector, ccipAdmin)
+        );
+        vm.stopPrank();
+    }
+
+    /// @dev A mis-encoded upgradeAndCall payload must fail loudly rather than
+    ///      leave the CCIP admin implicitly on the owner.
+    function test_InitializeV3_RevertsOnZeroAddress() public {
+        vm.startPrank(owner);
+        StablecoinV3 v3Impl = new StablecoinV3();
+        bytes memory initData =
+            abi.encodeWithSelector(StablecoinV3.initializeV3.selector, address(0));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(Stablecoin.NotAllowedAddress.selector, address(0))
+        );
+        proxyAdmin.upgradeAndCall(proxy, address(v3Impl), initData);
+        vm.stopPrank();
     }
 
     function test_SetCCIPAdmin_UpdatesAndEmits() public {
         _upgradeToV3();
 
         vm.expectEmit(true, true, false, false, address(token));
-        emit StablecoinV3.CCIPAdminTransferred(owner, alice);
+        emit StablecoinV3.CCIPAdminTransferred(ccipAdmin, alice);
 
         vm.prank(owner);
         token.setCCIPAdmin(alice);
@@ -625,6 +664,49 @@ contract StablecoinV3Test is Test {
             )
         );
         ccipPool.releaseOrMint(alice, 1e18);
+    }
+
+    /// @dev Pins the blast radius of the CCIP widening: a granted pool gains
+    ///      only `mint(address,uint256)` and `burn(uint256)`. Every other
+    ///      privileged entry point it must never reach stays `onlyOwner` (or, for
+    ///      `mint(uint256)`, unchanged and un-overridden) and rejects the pool.
+    function test_GrantedPool_CannotReachOtherPrivilegedFunctions() public {
+        _upgradeToV3();
+
+        vm.prank(owner);
+        token.grantMintAndBurnRoles(pool);
+        assertTrue(token.isCCIPMinterBurner(pool));
+
+        // Stablecoin.mint(uint256) — single-argument owner-issuance overload,
+        // never overridden by StablecoinV3, still onlyOwner.
+        vm.expectRevert("Ownable: caller is not the owner");
+        vm.prank(pool);
+        token.mint(1e18);
+
+        vm.expectRevert("Ownable: caller is not the owner");
+        vm.prank(pool);
+        token.freeze(alice);
+
+        vm.expectRevert("Ownable: caller is not the owner");
+        vm.prank(pool);
+        token.unfreeze(bob);
+
+        vm.expectRevert("Ownable: caller is not the owner");
+        vm.prank(pool);
+        token.pause();
+
+        vm.expectRevert("Ownable: caller is not the owner");
+        vm.prank(pool);
+        token.transferAutoOwnership(pool);
+
+        vm.expectRevert("Ownable: caller is not the owner");
+        vm.prank(pool);
+        token.setAutoMintMaxLimit(1e18);
+
+        // A pool must not be able to grant CCIP roles to itself or anyone else.
+        vm.expectRevert("Ownable: caller is not the owner");
+        vm.prank(pool);
+        token.grantMintAndBurnRoles(pool);
     }
 
     function test_EIP7598_StillWorksUnderV3() public {
